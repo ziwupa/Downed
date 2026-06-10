@@ -1,28 +1,28 @@
-# meta developer: @ziwupa
-# meta version: 2.0
-# meta description: .dn — вставляет аватарку юзера вместо unsido на мем "Ёбаный даун", отправляет как GIF
+# meta developer: @zetmodules
+# meta version: 3.0
+# meta description: .dn — мем "Ёбаный даун" с аватаркой юзера (MP4). Без реплая = своя аватарка.
 
 import io
+import os
 import asyncio
 import aiohttp
+import tempfile
+import subprocess
 
 from PIL import Image, ImageDraw, ImageFont
-from telethon.tl.types import User
-
 from .. import loader, utils
 
-BASE_IMAGE_URL = "https://x0.at/dK2k.jpg"
+BASE_VIDEO_URL = "https://files.catbox.moe/qxawqe.mp4"
 AVATAR_BOX = (607, 148, 1080, 581)
 
-# Точные цвета Telegram (user_id % 7)
 TG_COLORS = [
-    (255, 80,  80),    # 0 — красный
-    (255, 150, 0),     # 1 — оранжевый
-    (230, 185, 0),     # 2 — жёлтый
-    (50,  190, 100),   # 3 — зелёный
-    (0,   150, 240),   # 4 — синий
-    (120, 80,  230),   # 5 — фиолетовый
-    (235, 90,  165),   # 6 — розовый
+    (255, 80,  80),
+    (255, 150, 0),
+    (230, 185, 0),
+    (50,  190, 100),
+    (0,   150, 240),
+    (120, 80,  230),
+    (235, 90,  165),
 ]
 
 FONT_PATHS = [
@@ -34,7 +34,7 @@ FONT_PATHS = [
 
 @loader.tds
 class DownedMod(loader.Module):
-    """Мем «Ёбаный даун» — .dn реплай на юзера → его аватарка на место unsido (GIF)"""
+    """Мем «Ёбаный даун» — .dn [реплай] → MP4 с аватаркой"""
 
     strings = {
         "name": "Downed",
@@ -43,19 +43,21 @@ class DownedMod(loader.Module):
     }
 
     async def dncmd(self, message):
-        """.dn [реплай] — вставить аватарку юзера на мем"""
+        """[reply] — мем с аватаркой. Без реплая = твоя аватарка."""
         reply = await message.get_reply_message()
-        if not reply:
-            await utils.answer(message, self.strings["no_reply"])
-            return
+        sender = None
 
-        sender = await reply.get_sender()
+        if reply:
+            sender = await reply.get_sender()
+            reply_to = reply.id
+        else:
+            sender = await message.get_sender()
+            reply_to = None
 
         try:
             await message.delete()
 
-            base_bytes = await self._fetch_url(BASE_IMAGE_URL)
-            avatar_bytes = await self._get_avatar(message.client, sender)
+            avatar_bytes = await self._get_avatar(message.client, sender, is_self=(reply is None))
 
             if sender:
                 first = getattr(sender, "first_name", "") or ""
@@ -68,16 +70,16 @@ class DownedMod(loader.Module):
             if not avatar_bytes:
                 avatar_bytes = self._make_name_avatar(name, uid)
 
-            gif_buf = await asyncio.get_event_loop().run_in_executor(
-                None, self._make_gif, base_bytes, avatar_bytes
+            mp4_buf = await asyncio.get_event_loop().run_in_executor(
+                None, self._make_mp4, avatar_bytes
             )
 
             await message.client.send_file(
                 message.chat_id,
-                gif_buf,
+                mp4_buf,
                 caption=None,
-                reply_to=reply.id,
-                force_document=False,
+                reply_to=reply_to,
+                supports_streaming=True,
             )
 
         except Exception as e:
@@ -89,14 +91,18 @@ class DownedMod(loader.Module):
 
     async def _fetch_url(self, url: str) -> bytes:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                 resp.raise_for_status()
                 return await resp.read()
 
-    async def _get_avatar(self, client, entity) -> bytes | None:
+    async def _get_avatar(self, client, entity, is_self: bool = False) -> bytes | None:
         try:
             buf = io.BytesIO()
-            result = await client.download_profile_photo(entity, file=buf)
+            if is_self:
+                me = await client.get_me()
+                result = await client.download_profile_photo(me, file=buf)
+            else:
+                result = await client.download_profile_photo(entity, file=buf)
             if result is None:
                 return None
             buf.seek(0)
@@ -107,7 +113,6 @@ class DownedMod(loader.Module):
 
     @staticmethod
     def _make_name_avatar(name: str, uid: int) -> bytes:
-        """Цвет как в Telegram (uid % 7) + полный ник"""
         left, top, right, bottom = AVATAR_BOX
         w = right - left
         h = bottom - top
@@ -116,7 +121,6 @@ class DownedMod(loader.Module):
         img = Image.new("RGB", (w, h), color)
         draw = ImageDraw.Draw(img)
 
-        # Грузим шрифт
         font = None
         for path in FONT_PATHS:
             try:
@@ -125,7 +129,7 @@ class DownedMod(loader.Module):
             except Exception:
                 continue
 
-        # Автоподбор размера шрифта чтобы ник влез
+        f = ImageFont.load_default()
         for font_size in range(120, 8, -2):
             f = font.font_variant(size=font_size) if font else ImageFont.load_default()
             bbox = draw.textbbox((0, 0), name, font=f)
@@ -144,38 +148,62 @@ class DownedMod(loader.Module):
         buf.seek(0)
         return buf.read()
 
-    @staticmethod
-    def _jpeg_shakalize(img: Image.Image, quality: int) -> Image.Image:
-        tmp = io.BytesIO()
-        img.save(tmp, format="JPEG", quality=quality)
-        tmp.seek(0)
-        return Image.open(tmp).convert("RGB")
-
-    def _make_gif(self, base_bytes: bytes, avatar_bytes: bytes) -> io.BytesIO:
-        base = Image.open(io.BytesIO(base_bytes)).convert("RGB")
-        avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGB")
+    def _make_mp4(self, avatar_bytes: bytes) -> io.BytesIO:
+        base_video = self._fetch_sync(BASE_VIDEO_URL)
+        if not base_video:
+            raise RuntimeError("Не удалось скачать видео")
 
         left, top, right, bottom = AVATAR_BOX
         box_w = right - left
         box_h = bottom - top
 
-        avatar_img = avatar_img.resize((box_w, box_h), Image.LANCZOS)
-        avatar_img = self._jpeg_shakalize(avatar_img, quality=8)
-        base.paste(avatar_img, (left, top))
-        base = self._jpeg_shakalize(base, quality=8)
+        # Временные файлы
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as vf:
+            vf.write(base_video)
+            video_path = vf.name
 
-        frame = base.quantize(colors=128, method=Image.Quantize.FASTOCTREE)
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as af:
+            af.write(avatar_bytes)
+            avatar_path = af.name
 
-        buf = io.BytesIO()
-        buf.name = "downed.gif"
-        frame.save(
-            buf,
-            format="GIF",
-            save_all=True,
-            append_images=[],
-            optimize=False,
-            duration=100,
-            loop=0,
-        )
-        buf.seek(0)
-        return buf
+        out_path = tempfile.mktemp(suffix=".mp4")
+
+        try:
+            subprocess.run([
+                "ffmpeg", "-y",
+                "-i", video_path,
+                "-i", avatar_path,
+                "-filter_complex",
+                f"[1:v]scale={box_w}:{box_h}:force_original_aspect_ratio=decrease,"
+                f"pad={box_w}:{box_h}:(ow-iw)/2:(oh-ih)/2:black[avt];"
+                f"[0:v][avt]overlay={left}:{top}",
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "26",
+                "-pix_fmt", "yuv420p",
+                "-an",
+                "-movflags", "+faststart",
+                out_path
+            ], check=True, timeout=30,
+               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            with open(out_path, "rb") as f:
+                data = f.read()
+            buf = io.BytesIO(data)
+            buf.name = "downed.mp4"
+            return buf
+        finally:
+            for p in (video_path, avatar_path, out_path):
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _fetch_sync(url: str) -> bytes | None:
+        import urllib.request
+        try:
+            with urllib.request.urlopen(url, timeout=30) as r:
+                return r.read()
+        except Exception:
+            return None
