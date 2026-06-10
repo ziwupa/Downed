@@ -174,12 +174,10 @@ class DownedMod(loader.Module):
                 "-i", video_path,
                 "-i", avatar_path,
                 "-filter_complex",
-                f"[1:v]scale={box_w}:{box_h}:force_original_aspect_ratio=decrease,"
-                f"pad={box_w}:{box_h}:(ow-iw)/2:(oh-ih)/2:black[avt];"
+                f"[1:v]scale={box_w}:{box_h}:force_original_aspect_ratio=decrease[avt];"
                 f"[0:v][avt]overlay={left}:{top}",
                 "-c:v", "libx264",
-                "-preset", "fast",
-                "-crf", "26",
+                "-preset", "ultrafast",
                 "-pix_fmt", "yuv420p",
                 "-an",
                 "-movflags", "+faststart",
