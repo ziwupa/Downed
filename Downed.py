@@ -12,7 +12,7 @@ import subprocess
 from PIL import Image, ImageDraw, ImageFont
 from .. import loader, utils
 
-BASE_VIDEO_URL = "https://files.catbox.moe/qxawqe.mp4"
+BASE_VIDEO_URL = "https://kappa.lol/9pN0L7"
 AVATAR_BOX = (607, 148, 1080, 581)
 
 TG_COLORS = [
