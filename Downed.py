@@ -14,7 +14,7 @@ from telethon.tl.types import User
 
 from .. import loader, utils
 
-BASE_IMAGE_URL = "https://cdn.jumpshare.com/dl/jmpyXs4Zl8S-vhhoL_mdM004_lJDDvuEoJv0PaBj3uFjiabr3CQZ_KzbA0soExBQnPr0z5NN_CQRlhWoY-W_UFJwA?s=a8acbd6edcf76a0bd60368c4fc7025475d7b859c&dl=1"
+BASE_IMAGE_URL = "https://raw.githubusercontent.com/ziwupa/Downed/main/base.mp4"
 AVATAR_BOX = (607, 148, 1080, 581)
 
 # Точные цвета Telegram (user_id % 7)
