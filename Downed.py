@@ -3,8 +3,11 @@
 # meta description: .dn — мем "Ёбаный даун" с аватаркой юзера (GIF). Без реплая = своя аватарка.
 
 import io
+import os
 import asyncio
 import aiohttp
+import tempfile
+import subprocess
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -153,7 +156,7 @@ class DownedMod(loader.Module):
         return Image.open(tmp).convert("RGB")
 
     def _make_gif(self, avatar_bytes: bytes) -> io.BytesIO:
-        base_bytes = self._fetch_sync(BASE_IMAGE_URL)
+        base_bytes = self._get_base_frame()
         if not base_bytes:
             raise RuntimeError("Не удалось загрузить базу")
 
@@ -193,3 +196,30 @@ class DownedMod(loader.Module):
                 return r.read()
         except Exception:
             return None
+
+    def _get_base_frame(self) -> bytes | None:
+        """Скачивает MP4 и извлекает первый кадр как JPEG."""
+        import subprocess
+        import tempfile
+        video_bytes = self._fetch_sync(BASE_IMAGE_URL)
+        if not video_bytes:
+            return None
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as vf:
+            vf.write(video_bytes)
+            video_path = vf.name
+        out_path = tempfile.mktemp(suffix=".jpg")
+        try:
+            subprocess.run([
+                "ffmpeg", "-y", "-i", video_path,
+                "-vframes", "1", "-q:v", "2",
+                out_path
+            ], check=True, timeout=15,
+               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            with open(out_path, "rb") as f:
+                return f.read()
+        except Exception:
+            return None
+        finally:
+            for p in (video_path, out_path):
+                try: os.unlink(p)
+                except: pass
