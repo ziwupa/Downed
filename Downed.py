@@ -1,6 +1,6 @@
 # meta developer: @zetmodules
 # meta version: 2.1
-# meta description: .dn — мем "Ёбаный даун" с аватаркой юзера (GIF). Без реплая = своя аватарка.
+# meta description: .dn — мем "Ёбаный даун" с аватаркой (GIF). Без реплая = своя аватарка.
 
 import io
 import os
@@ -10,20 +10,22 @@ import tempfile
 import subprocess
 
 from PIL import Image, ImageDraw, ImageFont
+from telethon.tl.types import User
 
 from .. import loader, utils
 
-BASE_IMAGE_URL = "https://raw.githubusercontent.com/ziwupa/Downed/main/base.mp4"
+BASE_IMAGE_URL = "https://cdn.jumpshare.com/dl/jmpyXs4Zl8S-vhhoL_mdM004_lJDDvuEoJv0PaBj3uFjiabr3CQZ_KzbA0soExBQnPr0z5NN_CQRlhWoY-W_UFJwA?s=a8acbd6edcf76a0bd60368c4fc7025475d7b859c&dl=1"
 AVATAR_BOX = (607, 148, 1080, 581)
 
+# Точные цвета Telegram (user_id % 7)
 TG_COLORS = [
-    (255, 80,  80),
-    (255, 150, 0),
-    (230, 185, 0),
-    (50,  190, 100),
-    (0,   150, 240),
-    (120, 80,  230),
-    (235, 90,  165),
+    (255, 80,  80),    # 0 — красный
+    (255, 150, 0),     # 1 — оранжевый
+    (230, 185, 0),     # 2 — жёлтый
+    (50,  190, 100),   # 3 — зелёный
+    (0,   150, 240),   # 4 — синий
+    (120, 80,  230),   # 5 — фиолетовый
+    (235, 90,  165),   # 6 — розовый
 ]
 
 FONT_PATHS = [
@@ -35,15 +37,16 @@ FONT_PATHS = [
 
 @loader.tds
 class DownedMod(loader.Module):
-    """Мем «Ёбаный даун» — .dn [реплай] → GIF с аватаркой. Без реплая = твоя аватарка."""
+    """Мем «Ёбаный даун» — .dn реплай на юзера → его аватарка на место unsido (GIF)"""
 
     strings = {
         "name": "Downed",
+        "no_reply": "❌ <b>Ответь на сообщение</b>",
         "error": "❌ <b>Ошибка:</b> <code>{}</code>",
     }
 
     async def dncmd(self, message):
-        """[reply] — мем с аватаркой. Без реплая = твоя."""
+        """[reply] — мем с аватаркой. Без реплая = твоя аватарка."""
         reply = await message.get_reply_message()
 
         if reply:
@@ -58,6 +61,7 @@ class DownedMod(loader.Module):
         try:
             await message.delete()
 
+            base_bytes = self._get_base_frame()
             avatar_bytes = await self._get_avatar(message.client, sender, is_self=is_self)
 
             if sender:
@@ -72,7 +76,7 @@ class DownedMod(loader.Module):
                 avatar_bytes = self._make_name_avatar(name, uid)
 
             gif_buf = await asyncio.get_event_loop().run_in_executor(
-                None, self._make_gif, avatar_bytes
+                None, self._make_gif, base_bytes, avatar_bytes
             )
 
             await message.client.send_file(
@@ -113,7 +117,40 @@ class DownedMod(loader.Module):
             return None
 
     @staticmethod
+    def _fetch_sync(url: str) -> bytes | None:
+        import urllib.request
+        try:
+            with urllib.request.urlopen(url, timeout=30) as r:
+                return r.read()
+        except Exception:
+            return None
+
+    def _get_base_frame(self) -> bytes | None:
+        video_bytes = self._fetch_sync(BASE_IMAGE_URL)
+        if not video_bytes:
+            return None
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as vf:
+            vf.write(video_bytes)
+            video_path = vf.name
+        out_path = tempfile.mktemp(suffix=".jpg")
+        try:
+            subprocess.run([
+                "ffmpeg", "-y", "-i", video_path,
+                "-vframes", "1", "-q:v", "2", out_path
+            ], check=True, timeout=15,
+               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            with open(out_path, "rb") as f:
+                return f.read()
+        except Exception:
+            return None
+        finally:
+            for p in (video_path, out_path):
+                try: os.unlink(p)
+                except: pass
+
+    @staticmethod
     def _make_name_avatar(name: str, uid: int) -> bytes:
+        """Цвет как в Telegram (uid % 7) + полный ник"""
         left, top, right, bottom = AVATAR_BOX
         w = right - left
         h = bottom - top
@@ -122,6 +159,7 @@ class DownedMod(loader.Module):
         img = Image.new("RGB", (w, h), color)
         draw = ImageDraw.Draw(img)
 
+        # Грузим шрифт
         font = None
         for path in FONT_PATHS:
             try:
@@ -130,6 +168,7 @@ class DownedMod(loader.Module):
             except Exception:
                 continue
 
+        # Автоподбор размера шрифта чтобы ник влез
         for font_size in range(120, 8, -2):
             f = font.font_variant(size=font_size) if font else ImageFont.load_default()
             bbox = draw.textbbox((0, 0), name, font=f)
@@ -155,11 +194,7 @@ class DownedMod(loader.Module):
         tmp.seek(0)
         return Image.open(tmp).convert("RGB")
 
-    def _make_gif(self, avatar_bytes: bytes) -> io.BytesIO:
-        base_bytes = self._get_base_frame()
-        if not base_bytes:
-            raise RuntimeError("Не удалось загрузить базу")
-
+    def _make_gif(self, base_bytes: bytes, avatar_bytes: bytes) -> io.BytesIO:
         base = Image.open(io.BytesIO(base_bytes)).convert("RGB")
         avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGB")
 
@@ -187,39 +222,3 @@ class DownedMod(loader.Module):
         )
         buf.seek(0)
         return buf
-
-    @staticmethod
-    def _fetch_sync(url: str) -> bytes | None:
-        import urllib.request
-        try:
-            with urllib.request.urlopen(url, timeout=30) as r:
-                return r.read()
-        except Exception:
-            return None
-
-    def _get_base_frame(self) -> bytes | None:
-        """Скачивает MP4 и извлекает первый кадр как JPEG."""
-        import subprocess
-        import tempfile
-        video_bytes = self._fetch_sync(BASE_IMAGE_URL)
-        if not video_bytes:
-            return None
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as vf:
-            vf.write(video_bytes)
-            video_path = vf.name
-        out_path = tempfile.mktemp(suffix=".jpg")
-        try:
-            subprocess.run([
-                "ffmpeg", "-y", "-i", video_path,
-                "-vframes", "1", "-q:v", "2",
-                out_path
-            ], check=True, timeout=15,
-               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            with open(out_path, "rb") as f:
-                return f.read()
-        except Exception:
-            return None
-        finally:
-            for p in (video_path, out_path):
-                try: os.unlink(p)
-                except: pass
